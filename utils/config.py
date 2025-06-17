@@ -44,9 +44,9 @@ class Config(G):
         while queue:
             x = queue.popleft()
 
-            if isinstance(x, (collections.Sequence, collections.UserList)) and not isinstance(x, six.string_types):
+            if isinstance(x, (collections.abc.Sequence, collections.UserList)) and not isinstance(x, six.string_types):
                 items = enumerate(x)
-            elif isinstance(x, (collections.Mapping, collections.UserDict)):
+            elif isinstance(x, (collections.abc.Mapping, collections.UserDict)):
                 items = x.items()
             else:
                 items = []

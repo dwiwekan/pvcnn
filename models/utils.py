@@ -1,7 +1,7 @@
 import functools
 
 import torch.nn as nn
-
+from modules.fuzzypvconv import FuzzyPVConv
 from modules import SharedMLP, PVConv, PointNetSAModule, PointNetAModule, PointNetFPModule
 
 __all__ = ['create_mlp_components', 'create_pointnet_components',
@@ -44,19 +44,26 @@ def create_mlp_components(in_channels, out_channels, classifier=False, dim=2, wi
             layers.append(SharedMLP(in_channels, int(r * out_channels[-1])))
     return layers, out_channels[-1] if classifier else int(r * out_channels[-1])
 
-
 def create_pointnet_components(blocks, in_channels, with_se=False, normalize=True, eps=0,
-                               width_multiplier=1, voxel_resolution_multiplier=1):
+                               width_multiplier=1, voxel_resolution_multiplier=1, dilation_rates=None):
     r, vr = width_multiplier, voxel_resolution_multiplier
 
     layers, concat_channels = [], 0
-    for out_channels, num_blocks, voxel_resolution in blocks:
+    for idx, (out_channels, num_blocks, voxel_resolution) in enumerate(blocks):
         out_channels = int(r * out_channels)
+        
+        # Get dilation rate for this layer
+        dilation = 1
+        if dilation_rates is not None and idx < len(dilation_rates):
+            dilation = dilation_rates[idx]
+            
         if voxel_resolution is None:
             block = SharedMLP
         else:
-            block = functools.partial(PVConv, kernel_size=3, resolution=int(vr * voxel_resolution),
-                                      with_se=with_se, normalize=normalize, eps=eps)
+            # ENABLE FuzzyPVConv with memory optimization for RTX 3090
+            block = functools.partial(FuzzyPVConv, kernel_size=3, resolution=int(vr * voxel_resolution),
+                                      with_se=with_se, normalize=normalize, eps=eps, dilation=dilation,
+                                      use_fuzzy=True, fuzzy_radius=0.05, fuzzy_kernel=[4, 2, 2])  # Reduced params
         for _ in range(num_blocks):
             layers.append(block(in_channels, out_channels))
             in_channels = out_channels
@@ -65,22 +72,30 @@ def create_pointnet_components(blocks, in_channels, with_se=False, normalize=Tru
 
 
 def create_pointnet2_sa_components(sa_blocks, extra_feature_channels, with_se=False, normalize=True, eps=0,
-                                   width_multiplier=1, voxel_resolution_multiplier=1):
+                                   width_multiplier=1, voxel_resolution_multiplier=1, dilation_rates=None):
     r, vr = width_multiplier, voxel_resolution_multiplier
     in_channels = extra_feature_channels + 3
 
     sa_layers, sa_in_channels = [], []
-    for conv_configs, sa_configs in sa_blocks:
+    for idx, (conv_configs, sa_configs) in enumerate(sa_blocks):
         sa_in_channels.append(in_channels)
         sa_blocks = []
         if conv_configs is not None:
             out_channels, num_blocks, voxel_resolution = conv_configs
             out_channels = int(r * out_channels)
+            
+            # Get dilation rate for this layer
+            dilation = 1
+            if dilation_rates is not None and idx < len(dilation_rates):
+                dilation = dilation_rates[idx]
+                
             if voxel_resolution is None:
                 block = SharedMLP
             else:
-                block = functools.partial(PVConv, kernel_size=3, resolution=int(vr * voxel_resolution),
-                                          with_se=with_se, normalize=normalize, eps=eps)
+                # ENABLE FuzzyPVConv with memory optimization
+                block = functools.partial(FuzzyPVConv, kernel_size=3, resolution=int(vr * voxel_resolution),
+                                          with_se=with_se, normalize=normalize, eps=eps, dilation=dilation,
+                                          use_fuzzy=True, fuzzy_radius=0.05, fuzzy_kernel=[4, 2, 2])  # Reduced params
             for _ in range(num_blocks):
                 sa_blocks.append(block(in_channels, out_channels))
                 in_channels = out_channels
@@ -110,7 +125,7 @@ def create_pointnet2_sa_components(sa_blocks, extra_feature_channels, with_se=Fa
 
 
 def create_pointnet2_fp_modules(fp_blocks, in_channels, sa_in_channels, with_se=False, normalize=True, eps=0,
-                                width_multiplier=1, voxel_resolution_multiplier=1):
+                                width_multiplier=1, voxel_resolution_multiplier=1, dilation_rates=None):
     r, vr = width_multiplier, voxel_resolution_multiplier
 
     fp_layers = []
@@ -124,11 +139,17 @@ def create_pointnet2_fp_modules(fp_blocks, in_channels, sa_in_channels, with_se=
         if conv_configs is not None:
             out_channels, num_blocks, voxel_resolution = conv_configs
             out_channels = int(r * out_channels)
+            
+            # Get dilation rate for this layer
+            dilation = 1
+            if dilation_rates is not None and fp_idx < len(dilation_rates):
+                dilation = dilation_rates[fp_idx]
+                
             if voxel_resolution is None:
                 block = SharedMLP
             else:
                 block = functools.partial(PVConv, kernel_size=3, resolution=int(vr * voxel_resolution),
-                                          with_se=with_se, normalize=normalize, eps=eps)
+                                          with_se=with_se, normalize=normalize, eps=eps, dilation=dilation)
             for _ in range(num_blocks):
                 fp_blocks.append(block(in_channels, out_channels))
                 in_channels = out_channels
